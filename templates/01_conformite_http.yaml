@@ -1,0 +1,96 @@
+name: "Conformité HTTP de base"
+description: "Comportement protocolaire élémentaire et robustesse face aux requêtes inhabituelles"
+variables:
+  base_url: "http://localhost:8080"
+defaults:
+  timeout: 10
+  verify: false
+  headers:
+    User-Agent: "HTTPDebugger/1.0 (conformity)"
+    Accept: "*/*"
+tests:
+  - id: http-001
+    name: "GET / répond sans erreur"
+    severity: high
+    request: { method: GET, path: / }
+    assert:
+      - status: ["2xx", "3xx"]
+      - header_present: Content-Type
+      - time_lt: 2.0
+
+  - id: http-002
+    name: "HEAD / ne renvoie pas de corps"
+    severity: medium
+    request: { method: HEAD, path: / }
+    assert:
+      - status: ["2xx", "3xx"]
+      - body_empty: true
+
+  - id: http-003
+    name: "OPTIONS / ne provoque pas d'erreur serveur"
+    severity: low
+    request: { method: OPTIONS, path: / }
+    assert:
+      - status_not: "5xx"
+
+  - id: http-004
+    name: "Page inexistante → 404 sans fuite technique"
+    severity: medium
+    request: { method: GET, path: "/cette-page-n-existe-pas-{{repeat:x:12}}" }
+    assert:
+      - status: 404
+      - body_not_regex: "(Traceback|Stack trace|Fatal error|Warning: |at [\\w.$<>]+\\(.*:\\d+:\\d+\\)|/var/www|node_modules)"
+
+  - id: http-005
+    name: "Méthode inconnue → 400/405/501 (jamais 200 ni 5xx inattendu)"
+    severity: medium
+    request: { method: FOOBAR, path: / }
+    assert:
+      - status: [400, 405, 501]
+
+  - id: http-006
+    name: "TRACE désactivé"
+    severity: medium
+    request: { method: TRACE, path: / }
+    assert:
+      - status: [400, 403, 404, 405, 501]
+
+  - id: http-007
+    name: "URI très longue (9000 car.) gérée proprement"
+    severity: medium
+    request: { method: GET, path: "/{{repeat:a:9000}}" }
+    assert:
+      - status_not: "5xx"
+      - status: [400, 404, 414]
+
+  - id: http-008
+    name: "En-tête géant (20 Ko) refusé proprement"
+    severity: medium
+    request:
+      method: GET
+      path: /
+      headers: { X-Large: "{{repeat:A:20000}}" }
+    assert:
+      - status_not: "5xx"
+
+  - id: http-009
+    name: "POST JSON invalide → pas d'erreur 5xx ni de trace"
+    severity: high
+    request:
+      method: POST
+      path: /
+      headers: { Content-Type: application/json }
+      body: '{"incomplet": [1, 2,'
+    assert:
+      - status_not: "5xx"
+      - body_not_regex: "(Traceback|SyntaxError|Unexpected token|Stack trace|Fatal error)"
+
+  - id: http-010
+    name: "Compression gzip proposée"
+    severity: info
+    request:
+      method: GET
+      path: /
+      headers: { Accept-Encoding: "gzip" }
+    assert:
+      - header_present: Content-Encoding
