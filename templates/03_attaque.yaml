@@ -1,0 +1,37 @@
+name: "Durcissement — injections (non destructif)"
+scope:
+  active_testing: true
+  requests_per_second: 2
+variables:
+  base_url: "http://localhost:8080"
+  canary: "{{uuid}}"
+  delay: "3"
+tests:
+  - id: xss-q
+    name: "XSS réfléchi — param q"
+    mode: attack
+    severity: high
+    request:
+      method: GET
+      path: "/search"
+      params: {q: "test"}
+    attack:
+      category: xss
+      target: query
+      param: q
+      success_if:
+        - body_contains_canary: "{{canary}}"
+  - id: sqli-login
+    name: "SQLi time-based — login"
+    mode: attack
+    severity: critical
+    request:
+      method: POST
+      path: "/login"
+      json: {username: "admin", password: "x"}
+    attack:
+      category: sqli_time_mysql
+      target: body
+      param: username
+      success_if:
+        - time_gt: 2.5

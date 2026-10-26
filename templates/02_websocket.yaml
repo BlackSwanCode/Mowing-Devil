@@ -1,0 +1,31 @@
+name: "WebSocket — Écho & CSWSH"
+variables:
+  ws_url: "ws://localhost:8080/ws"
+tests:
+  - id: ws-echo
+    name: "Écho ping/pong"
+    type: websocket
+    severity: low
+    websocket:
+      url: "{{ws_url}}"
+      subprotocols: ["json"]
+      connect_timeout: 5
+      messages:
+        - send_text: '{"action":"ping","id":1}'
+          expect_timeout: 3
+      assert:
+        - ws_connected: true
+        - ws_message_regex: '"pong"'
+  - id: ws-cswsh
+    name: "CSWSH — Origin externe accepté ?"
+    type: websocket
+    severity: high
+    websocket:
+      url: "{{ws_url}}"
+      origin: "https://evil.example.com"
+      connect_timeout: 5
+      messages:
+        - send_text: '{"action":"hello"}'
+          expect_timeout: 2
+      assert:
+        - ws_origin_accepted: false

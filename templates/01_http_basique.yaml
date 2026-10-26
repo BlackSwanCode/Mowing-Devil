@@ -1,0 +1,28 @@
+name: "HTTP — Santé & en-têtes"
+variables:
+  base_url: "http://localhost:8080"
+defaults:
+  read_timeout: 10
+  verify: false
+tests:
+  - id: health
+    name: "Health check"
+    severity: high
+    request:
+      method: GET
+      path: "/health"
+    assert:
+      - status: 200
+      - time_lt: 1.0
+      - json_path: {path: "$.status", equals: "ok"}
+  - id: security-headers
+    name: "En-têtes de sécurité"
+    severity: medium
+    request:
+      method: GET
+      path: "/"
+    assert:
+      - status: 200
+      - header_present: "Strict-Transport-Security"
+      - header_present: "X-Content-Type-Options"
+      - header_absent: "X-Powered-By"
