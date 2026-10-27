@@ -1,0 +1,36 @@
+name: "API — BOLA (Broken Object Level Authorization)"
+scope:
+  active_testing: true
+  requests_per_second: 2
+variables:
+  base_url: "http://localhost:8080"
+  own_id: "1"
+defaults:
+  read_timeout: 10
+  verify: false
+
+tests:
+  - id: bola-increment-id
+    name: "BOLA — incrémentation d'ID séquentiel"
+    severity: critical
+    request:
+      method: GET
+      path: "/api/users/{{own_id}}"
+    capture:
+      other_id:
+        json_path: "$.id"
+    assert:
+      - status: [200, 401, 403]
+
+  - id: bola-other-id
+    name: "BOLA — accès à l'ID +1 (doit échouer si authz correcte)"
+    severity: critical
+    request:
+      method: GET
+      path: "/api/users/2"
+    assert:
+      # Si 200 avec des données d'un autre utilisateur, c'est une faille
+      # On ne peut pas distinguer facilement sans contexte, donc on signale tout 200
+      - status_not: 200
+      # Alternative : si l'API renvoie toujours 200 mais avec des données différentes,
+      # utiliser body_not_contains sur un champ connu de l'utilisateur 1

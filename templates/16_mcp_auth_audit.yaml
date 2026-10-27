@@ -1,0 +1,60 @@
+name: "MCP — Audit d'authentification"
+variables:
+  base_url: "http://localhost:8080"
+  mcp_path: "/mcp"
+defaults:
+  read_timeout: 10
+  verify: false
+
+tests:
+  - id: mcp-401-without-token
+    name: "MCP — 401 sans token (auth correcte)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{mcp_path}}"
+      headers:
+        Content-Type: "application/json"
+      json:
+        jsonrpc: "2.0"
+        id: 1
+        method: "tools/list"
+        params: {}
+    assert:
+      - status: [401, 403]
+
+  - id: mcp-invalid-bearer
+    name: "MCP — Token Bearer invalide rejeté"
+    severity: critical
+    request:
+      method: POST
+      path: "{{mcp_path}}"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer invalid.{{timestamp}}"
+      json:
+        jsonrpc: "2.0"
+        id: 2
+        method: "tools/list"
+        params: {}
+    assert:
+      - status: [401, 403]
+
+  - id: mcp-auth-error-no-leak
+    name: "MCP — Erreur d'auth sans fuite d'info"
+    severity: medium
+    request:
+      method: POST
+      path: "{{mcp_path}}"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer invalid"
+      json:
+        jsonrpc: "2.0"
+        id: 3
+        method: "tools/list"
+        params: {}
+    assert:
+      - status: [401, 403]
+      # Pas de stack trace, pas de nom de variable d'environnement, pas de DB
+      - body_not_regex: "(?i)(traceback|stack|at [\\w.]+\\(|SQLSTATE|DB_|SECRET|TOKEN=)"

@@ -1,0 +1,96 @@
+name: "Exposition — Fichiers & endpoints sensibles"
+variables:
+  base_url: "http://localhost:8080"
+defaults:
+  read_timeout: 8
+  verify: false
+  follow_redirects: false
+
+tests:
+  - id: env-file
+    name: ".env exposé"
+    severity: critical
+    request:
+      method: GET
+      path: "/.env"
+    assert:
+      - status: 200
+      - body_regex: "(?m)^(DB_PASSWORD|APP_KEY|SECRET_KEY|AWS_ACCESS_KEY_ID)="
+      - header_not_matches:
+          name: "Content-Type"
+          regex: "(?i)text/html"
+
+  - id: git-config
+    name: ".git/config exposé"
+    severity: high
+    request:
+      method: GET
+      path: "/.git/config"
+    assert:
+      - status: 200
+      - body_contains: "[core]"
+      - body_contains: "repositoryformatversion"
+
+  - id: git-head
+    name: ".git/HEAD exposé"
+    severity: high
+    request:
+      method: GET
+      path: "/.git/HEAD"
+    assert:
+      - status: 200
+      - body_regex: "^ref: refs/heads/"
+
+  - id: backup-zip
+    name: "Archive de sauvegarde"
+    severity: high
+    request:
+      method: GET
+      path: "/backup.zip"
+    assert:
+      # PK\x03\x04 = signature ZIP ; b64 de "PK\x03\x04" = "UEsDBA=="
+      - status: 200
+      - body_contains: "UEsDBA"
+    # note : ce test ne fonctionne que si la réponse n'est pas gzippée
+    # (httpx désactive la décompression transparente si Content-Encoding est absent)
+
+  - id: php-info
+    name: "phpinfo() exposé"
+    severity: high
+    request:
+      method: GET
+      path: "/phpinfo.php"
+    assert:
+      - status: 200
+      - body_contains: "PHP Version"
+      - body_contains: "php.ini"
+
+  - id: spring-actuator-env
+    name: "Spring Boot Actuator /env exposé"
+    severity: critical
+    request:
+      method: GET
+      path: "/actuator/env"
+    assert:
+      - status: 200
+      - body_regex: "\"(activeProfiles|propertySources)\""
+
+  - id: swagger-ui
+    name: "Swagger/OpenAPI UI exposée"
+    severity: medium
+    request:
+      method: GET
+      path: "/swagger-ui/index.html"
+    assert:
+      - status: 200
+      - body_contains: "swagger-ui"
+
+  - id: directory-listing
+    name: "Listing de répertoire activé"
+    severity: medium
+    request:
+      method: GET
+      path: "/uploads/"
+    assert:
+      - status: 200
+      - body_regex: "<title>Index of /"

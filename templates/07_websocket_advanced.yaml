@@ -1,0 +1,66 @@
+name: "WebSocket — CSWSH étendu & fuites"
+variables:
+  ws_url: "ws://localhost:8080/ws"
+  evil_origin: "https://evil.example.com"
+
+tests:
+  - id: ws-cswsh-null-origin
+    name: "CSWSH — Origin null"
+    type: websocket
+    severity: high
+    websocket:
+      url: "{{ws_url}}"
+      origin: "null"
+      connect_timeout: 5
+      messages:
+        - send_text: '{"action":"hello"}'
+          expect_timeout: 2
+      assert:
+        - ws_origin_accepted: false
+
+  - id: ws-cswsh-subdomain
+    name: "CSWSH — Origin sous-domaine contrôlable"
+    type: websocket
+    severity: high
+    websocket:
+      url: "{{ws_url}}"
+      origin: "{{evil_origin}}"
+      connect_timeout: 5
+      assert:
+        - ws_connected: false
+
+  - id: ws-close-code
+    name: "Fermeture propre (close code 1000)"
+    type: websocket
+    severity: low
+    websocket:
+      url: "{{ws_url}}"
+      connect_timeout: 5
+      messages:
+        - send_text: '{"action":"shutdown"}'
+          expect_timeout: 2
+      assert:
+        - ws_close_code: 1000
+
+  - id: ws-no-subprotocol
+    name: "Subprotocol non négocié quand absent"
+    type: websocket
+    severity: low
+    websocket:
+      url: "{{ws_url}}"
+      connect_timeout: 5
+      assert:
+        - ws_subprotocol: ""
+
+  - id: ws-json-error-leak
+    name: "Fuite de stack trace dans les erreurs WS"
+    type: websocket
+    severity: medium
+    websocket:
+      url: "{{ws_url}}"
+      connect_timeout: 5
+      messages:
+        - send_text: '{"action":"__invalid__"}'
+          expect_timeout: 2
+      assert:
+        - ws_message_regex: "(?i)(stack|traceback|Exception|at [\\w.]+\\(.*\\.java)"

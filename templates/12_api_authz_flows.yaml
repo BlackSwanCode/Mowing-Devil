@@ -1,0 +1,47 @@
+name: "API — Autorisation fonctionnelle & flux métier"
+scope:
+  active_testing: true
+variables:
+  base_url: "http://localhost:8080"
+
+tests:
+  - id: admin-endpoint-no-auth
+    name: "Endpoint admin accessible sans token"
+    severity: critical
+    request:
+      method: GET
+      path: "/api/admin/users"
+    assert:
+      - status: [401, 403]
+
+  - id: admin-endpoint-basic-auth
+    name: "Endpoint admin — bypass par méthode HTTP"
+    severity: high
+    request:
+      method: DELETE
+      path: "/api/admin/users/1"
+    assert:
+      - status: [401, 403, 405]
+
+  - id: password-reset-no-rate-limit
+    name: "Password reset — pas de rate limiting détectable"
+    severity: high
+    request:
+      method: POST
+      path: "/api/auth/reset-password"
+      json: {email: "test@example.com"}
+    assert:
+      - status: [200, 202, 204]
+      # Si l'API répond toujours 200 sans header Retry-After, c'est un signal
+      - header_absent: "Retry-After"
+      - header_absent: "X-RateLimit-Limit"
+
+  - id: coupon-reuse
+    name: "Coupon — réutilisation possible (détection basique)"
+    severity: medium
+    request:
+      method: POST
+      path: "/api/coupons/apply"
+      json: {code: "PROMO10", order_id: "1"}
+    assert:
+      - status_not: 500

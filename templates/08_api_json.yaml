@@ -1,0 +1,62 @@
+name: "API — Robustesse JSON & auth"
+variables:
+  base_url: "http://localhost:8080"
+defaults:
+  read_timeout: 10
+  verify: false
+
+tests:
+  - id: unauthorized-shape
+    name: "401/403 — pas de fuite d'info dans l'erreur"
+    severity: medium
+    request:
+      method: GET
+      path: "/api/v1/users"
+    assert:
+      - status: [401, 403]
+      - body_not_regex: "(?i)(stack|traceback|at [\\w.]+\\(.*\\.java|SQLSTATE)"
+
+  - id: malformed-json
+    name: "JSON malformé — pas de 500"
+    severity: medium
+    request:
+      method: POST
+      path: "/api/v1/users"
+      headers: {Content-Type: "application/json"}
+      body: '{"username": "x", "password": '
+    assert:
+      - status_not: 500
+      - body_not_regex: "(?i)(JSONDecodeError|Unexpected end of JSON)"
+
+  - id: mass-assignment
+    name: "Mass assignment — champ is_admin ignoré"
+    severity: high
+    request:
+      method: POST
+      path: "/api/v1/users"
+      json: {username: "pentest_user", password: "x", is_admin: true, role: "admin"}
+    assert:
+      - status_not: 200
+      # ou, si 200 : vérifier que is_admin n'est pas accepté
+      # - body_not_regex: "\"is_admin\"\\s*:\\s*true"
+
+  - id: rate-limit-headers
+    name: "Rate-limit — en-têtes informatifs"
+    severity: low
+    request:
+      method: GET
+      path: "/api/v1/health"
+    assert:
+      - status: 200
+      - header_present: "X-RateLimit-Limit"
+      - header_present: "Retry-After"
+
+  - id: api-version-leak
+    name: "Version API exposée dans les en-têtes"
+    severity: low
+    request:
+      method: GET
+      path: "/api/v1/health"
+    assert:
+      - header_absent: "X-Api-Version"
+      - header_absent: "X-Application-Version"

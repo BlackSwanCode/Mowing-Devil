@@ -1,0 +1,48 @@
+name: "MCP — Tool Poisoning (analyse de descriptions)"
+variables:
+  base_url: "http://localhost:8080"
+  mcp_path: "/mcp"
+defaults:
+  read_timeout: 10
+  verify: false
+
+tests:
+  - id: mcp-tool-description-suspicious
+    name: "MCP — Description d'outil suspecte (injection de prompt)"
+    severity: high
+    request:
+      method: POST
+      path: "{{mcp_path}}"
+      headers:
+        Content-Type: "application/json"
+        Accept: "application/json, text/event-stream"
+      json:
+        jsonrpc: "2.0"
+        id: 10
+        method: "tools/list"
+        params: {}
+    assert:
+      # Recherche de patterns d'injection dans les descriptions
+      - body_not_regex: "(?i)(ignore previous|you must|system:|<\\|im_start\\|>|\\[INST\\])"
+      # Caractères zero-width (U+200B, U+200C, U+200D, U+FEFF)
+      - body_not_regex: "[\\u200b\\u200c\\u200d\\ufeff]"
+      # Références à des fichiers sensibles
+      - body_not_regex: "(?i)(~/|\\.ssh/|id_rsa|\\.env|/etc/passwd|AWS_SECRET)"
+
+  - id: mcp-tool-name-confusable
+    name: "MCP — Noms d'outils confusables (homoglyphes)"
+    severity: medium
+    request:
+      method: POST
+      path: "{{mcp_path}}"
+      headers:
+        Content-Type: "application/json"
+        Accept: "application/json, text/event-stream"
+      json:
+        jsonrpc: "2.0"
+        id: 11
+        method: "tools/list"
+        params: {}
+    assert:
+      # Détection de mélange de scripts Unicode (cyrillique/latin) dans les noms
+      - body_not_regex: "[\\u0400-\\u04FF].*[a-zA-Z]|[a-zA-Z].*[\\u0400-\\u04FF]"

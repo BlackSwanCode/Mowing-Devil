@@ -1,0 +1,67 @@
+name: "MCP — Exposition & énumération non authentifiée"
+variables:
+  base_url: "http://localhost:8080"
+  mcp_path: "/mcp"
+defaults:
+  read_timeout: 10
+  verify: false
+
+tests:
+  - id: mcp-initialize-no-auth
+    name: "MCP — initialize sans authentification"
+    severity: critical
+    request:
+      method: POST
+      path: "{{mcp_path}}"
+      headers:
+        Content-Type: "application/json"
+        Accept: "application/json, text/event-stream"
+      json:
+        jsonrpc: "2.0"
+        id: 1
+        method: "initialize"
+        params:
+          protocolVersion: "2024-11-05"
+          capabilities: {}
+          clientInfo: {name: "pentest", version: "1.0"}
+    assert:
+      - status: 200
+      - body_contains: "jsonrpc"
+      - body_contains: "serverInfo"
+
+  - id: mcp-tools-list-no-auth
+    name: "MCP — tools/list sans authentification"
+    severity: critical
+    request:
+      method: POST
+      path: "{{mcp_path}}"
+      headers:
+        Content-Type: "application/json"
+        Accept: "application/json, text/event-stream"
+      json:
+        jsonrpc: "2.0"
+        id: 2
+        method: "tools/list"
+        params: {}
+    assert:
+      - status: 200
+      - body_regex: "\"tools\"\\s*:\\s*\\["
+
+  - id: mcp-resources-list
+    name: "MCP — resources/list exposé"
+    severity: high
+    request:
+      method: POST
+      path: "{{mcp_path}}"
+      headers:
+        Content-Type: "application/json"
+        Accept: "application/json, text/event-stream"
+      json:
+        jsonrpc: "2.0"
+        id: 3
+        method: "resources/list"
+        params: {}
+    assert:
+      - status_not: 500
+      # Si 200 avec une liste non vide, l'énumération est possible
+      - body_not_regex: "\"resources\"\\s*:\\s*\\[\\s*\\]"

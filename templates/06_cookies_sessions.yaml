@@ -1,0 +1,66 @@
+name: "Sessions — Cookies, JWT, redirections"
+variables:
+  base_url: "http://localhost:8080"
+defaults:
+  read_timeout: 10
+  verify: false
+
+tests:
+  - id: cookie-flags-strict
+    name: "Flags cookies (Secure/HttpOnly/SameSite)"
+    severity: high
+    request:
+      method: GET
+      path: "/login"
+    assert:
+      - status: [200, 401]
+      - cookie_flags:
+          require: ["Secure", "HttpOnly", "SameSite"]
+          name: "*"
+
+  - id: session-cookie-secure
+    name: "Cookie de session forcément Secure"
+    severity: high
+    request:
+      method: GET
+      path: "/"
+    assert:
+      - cookie_secure_only: true
+
+  - id: jwt-in-cookie
+    name: "JWT en cookie (détection)"
+    severity: info
+    request:
+      method: GET
+      path: "/"
+    assert:
+      - body_regex: "eyJ[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{10,}"
+
+  - id: open-redirect-param
+    name: "Open redirect — param next"
+    mode: attack
+    severity: high
+    request:
+      method: GET
+      path: "/login"
+      params: {next: "/"}
+    attack:
+      category: open_redirect
+      target: query
+      param: next
+      success_if:
+        - location_host_differs: true
+
+  - id: crlf-injection-header
+    name: "CRLF injection via header"
+    mode: attack
+    severity: critical
+    request:
+      method: GET
+      path: "/"
+    attack:
+      category: crlf
+      target: header
+      param: "X-Forwarded-For"
+      success_if:
+        - header_injected: "X-Injected"

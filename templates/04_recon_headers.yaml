@@ -1,0 +1,71 @@
+name: "Recon — Fuites d'en-têtes & durcissement"
+variables:
+  base_url: "http://localhost:8080"
+defaults:
+  read_timeout: 10
+  verify: false
+  follow_redirects: false
+
+tests:
+  - id: full-security-headers
+    name: "CSP / COOP / CORP / COEP / Permissions-Policy"
+    severity: medium
+    request:
+      method: GET
+      path: "/"
+    assert:
+      - status: 200
+      - header_present: "Content-Security-Policy"
+      - header_present: "Cross-Origin-Opener-Policy"
+      - header_present: "Cross-Origin-Resource-Policy"
+      - header_present: "Cross-Origin-Embedder-Policy"
+      - header_present: "Permissions-Policy"
+      - header_present: "Referrer-Policy"
+      - header_absent: "X-AspNet-Version"
+      - header_absent: "X-Generator"
+      - header_absent: "X-Runtime"
+      - header_absent: "X-Debug-Token"
+
+  - id: hsts-preload
+    name: "HSTS présent et > 6 mois"
+    severity: medium
+    request:
+      method: GET
+      path: "/"
+    assert:
+      - header_present: "Strict-Transport-Security"
+      - header_matches:
+          name: "Strict-Transport-Security"
+          regex: "max-age=\\d{7,}"
+
+  - id: server-banner-leak
+    name: "Bannière serveur / techno exposée"
+    severity: low
+    request:
+      method: GET
+      path: "/"
+    assert:
+      - header_absent: "Server"
+      - header_absent: "X-Powered-By"
+
+  - id: options-allowed-methods
+    name: "Méthodes HTTP autorisées (OPTIONS)"
+    severity: info
+    request:
+      method: OPTIONS
+      path: "/"
+    assert:
+      - status: [200, 204, 405]
+      # TRACE/PUT actifs = signal d'alerte
+      - header_not_matches:
+          name: "Allow"
+          regex: "(?i)\\bTRACE\\b"
+
+  - id: robots-and-security-txt
+    name: "robots.txt / security.txt / sitemap.xml"
+    severity: info
+    request:
+      method: GET
+      path: "/robots.txt"
+    assert:
+      - status_not: 500

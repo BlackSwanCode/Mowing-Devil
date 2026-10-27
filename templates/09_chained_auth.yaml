@@ -1,0 +1,53 @@
+name: "Auth — Chaînage login → token → endpoint protégé"
+variables:
+  base_url: "http://localhost:8080"
+  username: "test"
+  password: "test"
+defaults:
+  read_timeout: 10
+  verify: false
+
+tests:
+  - id: login
+    name: "Login — récupération du token"
+    severity: info
+    request:
+      method: POST
+      path: "/api/login"
+      json: {username: "{{username}}", password: "{{password}}"}
+    capture:
+      token:
+        json_path: "$.access_token"
+    assert:
+      - status: 200
+      - json_path: {path: "$.access_token", type: "str"}
+
+  - id: protected-with-token
+    name: "Endpoint protégé — accès avec token"
+    severity: high
+    request:
+      method: GET
+      path: "/api/me"
+      headers: {Authorization: "Bearer {{token}}"}
+    assert:
+      - status: 200
+      - json_path: {path: "$.username", equals: "{{username}}"}
+
+  - id: protected-without-token
+    name: "Endpoint protégé — accès sans token (doit échouer)"
+    severity: critical
+    request:
+      method: GET
+      path: "/api/me"
+    assert:
+      - status: [401, 403]
+
+  - id: protected-bad-token
+    name: "Endpoint protégé — token invalide (doit échouer)"
+    severity: high
+    request:
+      method: GET
+      path: "/api/me"
+      headers: {Authorization: "Bearer invalid.{{timestamp}}"}
+    assert:
+      - status: [401, 403]

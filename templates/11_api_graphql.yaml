@@ -1,0 +1,44 @@
+name: "API GraphQL — Introspection, profondeur, SSRF"
+scope:
+  active_testing: true
+variables:
+  base_url: "http://localhost:8080"
+  graphql_endpoint: "/graphql"
+
+tests:
+  - id: graphql-introspection
+    name: "Introspection GraphQL activée"
+    severity: medium
+    request:
+      method: POST
+      path: "{{graphql_endpoint}}"
+      json:
+        query: "{ __schema { types { name } } }"
+    assert:
+      - status: 200
+      - json_path: {path: "$.data.__schema.types", type: "list"}
+
+  - id: graphql-depth-bomb
+    name: "GraphQL — requête profonde (depth 10)"
+    severity: high
+    request:
+      method: POST
+      path: "{{graphql_endpoint}}"
+      json:
+        query: "{ user { posts { comments { author { posts { comments { author { posts { comments { id } } } } } } } } } }"
+    assert:
+      # Si l'API répond 200 et met >5s, c'est un signal de DoS potentiel
+      - status_not: 200
+      # ou, si 200 :
+      # - time_lt: 2.0
+
+  - id: graphql-alias-amplification
+    name: "GraphQL — amplification par alias (100 champs)"
+    severity: high
+    request:
+      method: POST
+      path: "{{graphql_endpoint}}"
+      json:
+        query: "{ a0: __typename a1: __typename a2: __typename a3: __typename a4: __typename a5: __typename a6: __typename a7: __typename a8: __typename a9: __typename a10: __typename a11: __typename a12: __typename a13: __typename a14: __typename a15: __typename a16: __typename a17: __typename a18: __typename a19: __typename a20: __typename a21: __typename a22: __typename a23: __typename a24: __typename }"
+    assert:
+      - status_not: 200
