@@ -1,0 +1,229 @@
+name: "OWASP Top 10 2021 — Couverture par catégorie"
+# Un test (ou groupe de tests) par catégorie A01→A10.
+# Les catégories déjà bien couvertes ailleurs (A01 BOLA → 10_api_bola.yaml,
+# A03 XSS/SQLi réfléchis → 03_attaque.yaml) ne sont reprises ici que sous un
+# angle complémentaire pour éviter les doublons.
+scope:
+  active_testing: true
+  requests_per_second: 2
+variables:
+  base_url: "http://localhost:8080"
+  canary: "{{uuid}}"
+  delay: "3"
+defaults:
+  read_timeout: 10
+  verify: false
+  follow_redirects: false
+
+tests:
+  # ── A01:2021 — Broken Access Control ──────────────────────────────────
+  - id: a01-method-override-admin
+    name: "A01 — Contournement d'autorisation par changement de méthode HTTP"
+    severity: high
+    request:
+      method: PUT
+      path: "/api/admin/users/1"
+    assert:
+      - status: [401, 403, 405]
+
+  - id: a01-path-traversal-static
+    name: "A01 — Traversée de répertoire sur une ressource statique"
+    mode: attack
+    severity: critical
+    request:
+      method: GET
+      path: "/static/report"
+      params: {file: "report.pdf"}
+    attack:
+      category: traversal
+      target: query
+      param: file
+      success_if:
+        - body_regex: "root:.*:0:0:"
+
+  # ── A02:2021 — Cryptographic Failures ──────────────────────────────────
+  - id: a02-plaintext-http-available
+    name: "A02 — Service accessible en clair (HTTP sans upgrade forcé)"
+    severity: high
+    request:
+      method: GET
+      path: "/"
+    assert:
+      - status: [200, 301, 302]
+      - header_absent: "Strict-Transport-Security"
+
+  - id: a02-sensitive-data-in-query-string
+    name: "A02 — Jeton/mot de passe accepté dans l'URL (fuite via logs/referrer)"
+    severity: medium
+    request:
+      method: GET
+      path: "/api/login"
+      params: {token: "{{canary}}"}
+    assert:
+      - status_not: 500
+      - header_absent: "Referrer-Policy"
+
+  - id: a02-weak-hash-exposed
+    name: "A02 — Hash faible (MD5/SHA1) exposé dans une réponse"
+    severity: medium
+    request:
+      method: GET
+      path: "/api/user/profile"
+    assert:
+      - body_not_regex: "(?i)\\b[a-f0-9]{32}\\b"
+
+  # ── A03:2021 — Injection (complément SSTI/commande, cf. 03 et 19) ──────
+  - id: a03-os-command-injection-query
+    name: "A03 — Injection de commande OS — paramètre de recherche"
+    mode: attack
+    severity: critical
+    request:
+      method: GET
+      path: "/search"
+      params: {q: "test"}
+    attack:
+      category: cmdi
+      target: query
+      param: q
+      success_if:
+        - time_gt: 2.5
+
+  # ── A04:2021 — Insecure Design ──────────────────────────────────────────
+  - id: a04-no-bruteforce-protection
+    name: "A04 — Absence de protection anti-brute-force détectable sur le login"
+    severity: high
+    request:
+      method: POST
+      path: "/api/login"
+      json: {username: "admin", password: "wrong-{{timestamp}}"}
+    assert:
+      - status: [200, 401]
+      - header_absent: "Retry-After"
+      - header_absent: "X-RateLimit-Remaining"
+
+  - id: a04-negative-quantity-accepted
+    name: "A04 — Logique métier : quantité/prix négatif accepté"
+    severity: high
+    request:
+      method: POST
+      path: "/api/cart/items"
+      json: {product_id: "1", quantity: -5}
+    assert:
+      - status_not: 200
+
+  # ── A05:2021 — Security Misconfiguration ────────────────────────────────
+  - id: a05-trace-method-enabled
+    name: "A05 — Méthode TRACE activée (XST)"
+    severity: medium
+    request:
+      method: TRACE
+      path: "/"
+    assert:
+      - status_not: 200
+
+  - id: a05-cors-wildcard-with-credentials
+    name: "A05 — CORS : Origin reflété + credentials autorisés (misconfiguration critique)"
+    severity: critical
+    request:
+      method: GET
+      path: "/api/me"
+      headers:
+        Origin: "https://evil-{{canary}}.example"
+    assert:
+      - header_not_matches:
+          name: "Access-Control-Allow-Origin"
+          regex: "evil-{{canary}}\\.example"
+      - header_absent: "Access-Control-Allow-Credentials"
+
+  # ── A06:2021 — Vulnerable and Outdated Components ───────────────────────
+  - id: a06-component-version-disclosure
+    name: "A06 — Version précise d'un composant serveur divulguée"
+    severity: low
+    request:
+      method: GET
+      path: "/"
+    assert:
+      - header_not_matches:
+          name: "Server"
+          regex: "\\d+\\.\\d+(\\.\\d+)?"
+      - header_not_matches:
+          name: "X-Powered-By"
+          regex: "\\d+\\.\\d+"
+
+  # ── A07:2021 — Identification and Authentication Failures ──────────────
+  - id: a07-username-enumeration
+    name: "A07 — Énumération de comptes par message d'erreur différencié"
+    severity: medium
+    request:
+      method: POST
+      path: "/api/login"
+      json: {username: "utilisateur-inexistant-{{canary}}", password: "x"}
+    assert:
+      - status: [401, 404]
+      - body_not_regex: "(?i)(unknown user|utilisateur inconnu|no such user|user not found)"
+
+  - id: a07-weak-password-accepted
+    name: "A07 — Politique de mot de passe faible (ex. « 1234 ») acceptée à l'inscription"
+    severity: high
+    request:
+      method: POST
+      path: "/api/register"
+      json: {username: "pentest-{{canary}}", password: "1234", email: "pentest@example.com"}
+    assert:
+      - status_not: 201
+      - status_not: 200
+
+  # ── A08:2021 — Software and Data Integrity Failures ─────────────────────
+  - id: a08-insecure-deserialization-marker
+    name: "A08 — Indice de désérialisation non sûre (objet Java sérialisé accepté)"
+    severity: critical
+    request:
+      method: POST
+      path: "/api/import"
+      headers: {Content-Type: "application/octet-stream"}
+      body: "rO0ABXNyABFqYXZhLnV0aWwuSGFzaFNldA=="
+    assert:
+      - status_not: 500
+      - status_not: 200
+
+  - id: a08-script-without-sri
+    name: "A08 — Script tiers chargé sans Subresource Integrity (SRI)"
+    severity: low
+    request:
+      method: GET
+      path: "/"
+    assert:
+      - body_not_regex: "<script[^>]+src=[\"']https?://(?!{{base_url}})[^\"']+[\"'](?![^>]*integrity=)[^>]*></script>"
+
+  # ── A09:2021 — Security Logging and Monitoring Failures ─────────────────
+  - id: a09-no-request-id-on-error
+    name: "A09 — Pas d'identifiant de corrélation sur une erreur serveur"
+    severity: low
+    request:
+      method: GET
+      path: "/api/trigger-error-{{canary}}"
+    assert:
+      - header_present: "X-Request-Id"
+
+  # ── A10:2021 — Server-Side Request Forgery (SSRF) ───────────────────────
+  - id: a10-ssrf-webhook-metadata
+    name: "A10 — SSRF vers metadata cloud via un paramètre d'URL applicatif"
+    severity: critical
+    request:
+      method: POST
+      path: "/api/webhooks/test"
+      json: {callback_url: "http://169.254.169.254/latest/meta-data/"}
+    assert:
+      - status_not: 500
+      - body_not_contains: "ami-id"
+      - body_not_regex: "(?i)(accesskeyid|secretaccesskey)"
+
+  - id: a10-ssrf-internal-loopback
+    name: "A10 — SSRF vers une adresse de boucle locale"
+    severity: high
+    request:
+      method: POST
+      path: "/api/webhooks/test"
+      json: {callback_url: "http://127.0.0.1:22/"}
+    assert:
+      - status_not: 200

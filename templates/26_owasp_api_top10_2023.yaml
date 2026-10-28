@@ -1,0 +1,192 @@
+name: "OWASP API Security Top 10 (2023) — Couverture par catégorie"
+# Complète 10_api_bola.yaml, 11_api_graphql.yaml, 12_api_authz_flows.yaml,
+# 17_nosql_auth_bypass.yaml et 18_jwt_manipulation.yaml, qui couvrent déjà
+# en profondeur API1 (BOLA) et une partie d'API2 (JWT alg=none).
+scope:
+  active_testing: true
+  requests_per_second: 2
+variables:
+  base_url: "http://localhost:8080"
+  own_id: "1"
+  canary: "{{uuid}}"
+defaults:
+  read_timeout: 10
+  verify: false
+  follow_redirects: false
+
+tests:
+  # ── API1:2023 — Broken Object Level Authorization ───────────────────────
+  - id: api1-bola-nested-resource
+    name: "API1 — BOLA sur une ressource imbriquée (commande d'un autre compte)"
+    severity: critical
+    request:
+      method: GET
+      path: "/api/users/{{own_id}}/orders/2"
+    assert:
+      - status_not: 200
+
+  # ── API2:2023 — Broken Authentication ────────────────────────────────────
+  - id: api2-token-no-expiry-enforced
+    name: "API2 — Jeton expiré toujours accepté"
+    severity: critical
+    request:
+      method: GET
+      path: "/api/me"
+      headers:
+        Authorization: "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsImV4cCI6MTAwMDAwMDAwMH0.invalid"
+    assert:
+      - status: [401, 403]
+
+  - id: api2-password-reset-token-brute
+    name: "API2 — Token de réinitialisation de mot de passe court/prévisible accepté"
+    severity: high
+    request:
+      method: POST
+      path: "/api/auth/reset-password/confirm"
+      json: {token: "000000", new_password: "Pentest!{{canary}}"}
+    assert:
+      - status_not: 200
+
+  # ── API3:2023 — Broken Object Property Level Authorization ──────────────
+  - id: api3-excessive-data-exposure
+    name: "API3 — Exposition de propriétés sensibles non filtrées (password_hash, etc.)"
+    severity: high
+    request:
+      method: GET
+      path: "/api/users/{{own_id}}"
+    assert:
+      - status: 200
+      - body_not_regex: "(?i)(\"password\"|\"password_hash\"|\"salt\"|\"ssn\"|\"secret_key\")\\s*:"
+
+  - id: api3-mass-assignment-role
+    name: "API3 — Mass assignment : élévation de rôle via une propriété non exposée"
+    severity: critical
+    request:
+      method: PATCH
+      path: "/api/users/{{own_id}}"
+      json: {display_name: "pentest-{{canary}}", role: "admin", is_admin: true}
+    assert:
+      - status_not: 200
+
+  # ── API4:2023 — Unrestricted Resource Consumption ────────────────────────
+  - id: api4-no-pagination-limit
+    name: "API4 — Absence de limite de pagination (page_size arbitrairement grand accepté)"
+    severity: medium
+    request:
+      method: GET
+      path: "/api/users"
+      params: {page_size: "100000"}
+    assert:
+      - status_not: 200
+
+  - id: api4-oversized-payload-accepted
+    name: "API4 — Payload surdimensionné accepté sans rejet (DoS applicatif)"
+    severity: medium
+    request:
+      method: POST
+      path: "/api/comments"
+      json: {body: "{{repeat:A:200000}}"}
+    assert:
+      - status_not: 201
+      - status_not: 200
+
+  - id: api4-no-rate-limit-headers
+    name: "API4 — Pas d'en-têtes de limitation de débit sur un endpoint coûteux"
+    severity: low
+    request:
+      method: GET
+      path: "/api/search"
+      params: {q: "pentest"}
+    assert:
+      - header_present: "X-RateLimit-Limit"
+
+  # ── API5:2023 — Broken Function Level Authorization ──────────────────────
+  - id: api5-admin-function-as-user
+    name: "API5 — Fonction d'administration accessible avec un rôle utilisateur standard"
+    severity: critical
+    request:
+      method: POST
+      path: "/api/admin/users/{{own_id}}/promote"
+      json: {role: "admin"}
+    assert:
+      - status: [401, 403]
+
+  # ── API6:2023 — Unrestricted Access to Sensitive Business Flows ─────────
+  - id: api6-coupon-automation-no-captcha
+    name: "API6 — Flux métier sensible (application de coupon) sans protection anti-automatisation"
+    severity: medium
+    request:
+      method: POST
+      path: "/api/coupons/apply"
+      json: {code: "PROMO-{{canary}}", order_id: "1"}
+    assert:
+      - header_absent: "X-RateLimit-Remaining"
+      - status_not: 500
+
+  # ── API7:2023 — Server Side Request Forgery ───────────────────────────────
+  - id: api7-ssrf-via-import-url
+    name: "API7 — SSRF via un paramètre d'import/fetch d'URL distante"
+    severity: critical
+    request:
+      method: POST
+      path: "/api/import"
+      json: {source_url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/"}
+    assert:
+      - status_not: 500
+      - body_not_regex: "(?i)(accesskeyid|secretaccesskey|token)"
+
+  # ── API8:2023 — Security Misconfiguration ─────────────────────────────────
+  - id: api8-verbose-error-stacktrace
+    name: "API8 — Message d'erreur verbeux (stacktrace / nom de framework)"
+    severity: medium
+    request:
+      method: POST
+      path: "/api/users"
+      headers: {Content-Type: "application/json"}
+      body: '{"username": "x", "email": '
+    assert:
+      - status_not: 500
+      - body_not_regex: "(?i)(traceback|at [\\w.]+\\(|stack trace|SQLSTATE|Exception in thread)"
+
+  - id: api8-cors-permissive
+    name: "API8 — CORS trop permissif sur l'API (reflète n'importe quelle origine)"
+    severity: high
+    request:
+      method: GET
+      path: "/api/me"
+      headers:
+        Origin: "https://evil-{{canary}}.example"
+    assert:
+      - header_not_matches:
+          name: "Access-Control-Allow-Origin"
+          regex: "evil-{{canary}}\\.example"
+
+  # ── API9:2023 — Improper Inventory Management ─────────────────────────────
+  - id: api9-shadow-version-exposed
+    name: "API9 — Ancienne version d'API (shadow API) toujours accessible"
+    severity: high
+    request:
+      method: GET
+      path: "/api/v0/users"
+    assert:
+      - status: [404, 410]
+
+  - id: api9-openapi-spec-exposed
+    name: "API9 — Spécification OpenAPI exposée publiquement (inventaire d'endpoints)"
+    severity: low
+    request:
+      method: GET
+      path: "/openapi.json"
+    assert:
+      - status_not: 200
+
+  # ── API10:2023 — Unsafe Consumption of APIs ────────────────────────────────
+  - id: api10-unsanitized-upstream-passthrough
+    name: "API10 — Réponse d'une API tierce répercutée sans assainissement (en-têtes/HTML bruts)"
+    severity: medium
+    request:
+      method: GET
+      path: "/api/proxy/partner-status"
+    assert:
+      - status_not: 500
+      - body_not_regex: "<script[^>]*>"

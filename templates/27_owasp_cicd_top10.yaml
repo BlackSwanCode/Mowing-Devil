@@ -1,0 +1,165 @@
+name: "OWASP Top 10 CI/CD Security Risks — Exposition HTTP"
+# Les 10 risques CI/CD sont pour partie organisationnels/architecturaux
+# (gouvernance, séparation des rôles) et ne se testent pas en boîte noire
+# via de simples requêtes HTTP. Ce fichier couvre les risques qui ont une
+# surface HTTP observable : dashboards/consoles d'orchestrateur exposés,
+# API de build non authentifiées, registre d'artefacts ouvert, endpoints
+# de webhook sans vérification de signature, secrets dans les logs de build.
+#
+# Non couverts ici (nécessitent un accès à la configuration / au code, pas
+# seulement au trafic HTTP) : CICD-SEC-1 (contrôles de flux Git/branches),
+# CICD-SEC-3 (abus de la chaîne de dépendances), CICD-SEC-5 (PBAC), et
+# CICD-SEC-8 (gouvernance des services tiers).
+variables:
+  base_url: "http://localhost:8080"
+  canary: "{{uuid}}"
+defaults:
+  read_timeout: 10
+  verify: false
+  follow_redirects: false
+
+tests:
+  # ── CICD-SEC-2 — Inadequate Identity and Access Management ──────────────
+  - id: cicd2-jenkins-script-console
+    name: "CICD-SEC-2 — Console Groovy Jenkins (/script) accessible sans authentification"
+    severity: critical
+    request:
+      method: GET
+      path: "/script"
+    assert:
+      - status_not: 200
+      - body_not_contains: "Groovy script"
+
+  - id: cicd2-jenkins-api-unauth
+    name: "CICD-SEC-2 — API Jenkins (/api/json) listant les jobs sans authentification"
+    severity: high
+    request:
+      method: GET
+      path: "/api/json"
+    assert:
+      - status_not: 200
+      - body_not_contains: "\"jobs\""
+
+  - id: cicd2-gitlab-api-projects-unauth
+    name: "CICD-SEC-2 — API GitLab listant les projets sans authentification"
+    severity: high
+    request:
+      method: GET
+      path: "/api/v4/projects"
+    assert:
+      - status: [401, 403]
+
+  - id: cicd2-argocd-api-unauth
+    name: "CICD-SEC-2 — API Argo CD (/api/v1/applications) accessible sans authentification"
+    severity: critical
+    request:
+      method: GET
+      path: "/api/v1/applications"
+    assert:
+      - status: [401, 403]
+      - body_not_contains: "\"items\""
+
+  # ── CICD-SEC-4 — Poisoned Pipeline Execution (PPE) ───────────────────────
+  - id: cicd4-webhook-no-signature-check
+    name: "CICD-SEC-4 — Webhook de déclenchement de pipeline accepté sans vérification de signature"
+    severity: critical
+    request:
+      method: POST
+      path: "/webhooks/ci/trigger"
+      headers:
+        Content-Type: "application/json"
+      json:
+        ref: "refs/heads/main"
+        canary: "{{canary}}"
+    assert:
+      - status: [401, 403]
+
+  - id: cicd4-ci-config-publicly-writable-hint
+    name: "CICD-SEC-4 — Fichier de pipeline exposé en lecture publique (surface pour PPE)"
+    severity: medium
+    request:
+      method: GET
+      path: "/.gitlab-ci.yml"
+    assert:
+      - status_not: 200
+
+  # ── CICD-SEC-6 — Insufficient Credential Hygiene ─────────────────────────
+  - id: cicd6-build-log-secret-leak
+    name: "CICD-SEC-6 — Secret (clé AWS/API) visible dans un log de build exposé"
+    severity: critical
+    request:
+      method: GET
+      path: "/job/deploy/lastBuild/consoleText"
+    assert:
+      - status_not: 200
+      - body_not_regex: "(?i)(AWS_SECRET_ACCESS_KEY|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH) PRIVATE KEY-----|ghp_[A-Za-z0-9]{30,})"
+
+  - id: cicd6-env-dump-ci-variables
+    name: "CICD-SEC-6 — Variables d'environnement CI (secrets de déploiement) exposées"
+    severity: critical
+    request:
+      method: GET
+      path: "/actuator/env"
+    assert:
+      - status_not: 200
+      - body_not_regex: "(?i)(CI_JOB_TOKEN|DEPLOY_KEY|DOCKER_PASSWORD)"
+
+  # ── CICD-SEC-7 — Insecure System Configuration ───────────────────────────
+  - id: cicd7-docker-registry-catalog-open
+    name: "CICD-SEC-7 — Registre Docker (/v2/_catalog) accessible sans authentification"
+    severity: high
+    request:
+      method: GET
+      path: "/v2/_catalog"
+    assert:
+      - status: [401, 403]
+      - body_not_regex: "\"repositories\"\\s*:\\s*\\["
+
+  - id: cicd7-k8s-api-unauth
+    name: "CICD-SEC-7 — API Kubernetes accessible sans authentification"
+    severity: critical
+    request:
+      method: GET
+      path: "/api/v1/namespaces"
+    assert:
+      - status: [401, 403]
+
+  - id: cicd7-nexus-default-creds-page
+    name: "CICD-SEC-7 — Interface d'administration du gestionnaire d'artefacts exposée"
+    severity: medium
+    request:
+      method: GET
+      path: "/nexus/service/rest/v1/status"
+    assert:
+      - status_not: 200
+
+  # ── CICD-SEC-9 — Improper Artifact Integrity Validation ──────────────────
+  - id: cicd9-artifact-upload-no-auth-probe
+    name: "CICD-SEC-9 — Dépôt d'artefacts : upload potentiellement accessible sans authentification"
+    severity: high
+    request:
+      method: OPTIONS
+      path: "/repository/releases/"
+    assert:
+      - header_not_matches:
+          name: "Allow"
+          regex: "(?i)\\bPUT\\b"
+
+  - id: cicd9-unsigned-artifact-served
+    name: "CICD-SEC-9 — Artefact servi sans en-tête de signature/checksum associé"
+    severity: medium
+    request:
+      method: HEAD
+      path: "/repository/releases/app-latest.jar"
+    assert:
+      - header_present: "X-Checksum-Sha256"
+
+  # ── CICD-SEC-10 — Insufficient Logging and Visibility ────────────────────
+  - id: cicd10-no-audit-correlation-id
+    name: "CICD-SEC-10 — Pas d'identifiant de corrélation sur les appels à l'API CI/CD"
+    severity: low
+    request:
+      method: GET
+      path: "/api/v4/projects/1/pipelines"
+    assert:
+      - header_present: "X-Request-Id"
