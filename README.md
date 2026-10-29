@@ -923,5 +923,4 @@ listés pour éviter les faux positifs/négatifs silencieux :
 
 ## Licence
 
-Non spécifiée dans l'archive fournie — à ajouter (`LICENSE`) avant diffusion
-publique du dépôt si ce n'est pas déjà fait en amont.
+MiT
